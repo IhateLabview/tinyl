@@ -20,6 +20,11 @@ menu "RobustEar Konfiguration"
         string "MQTT Passwort"
         default ""
 
+    config RE_AUDIO_QOS
+        int "MQTT QoS fuer Audio (0 = schnell, 1 = mit Bestaetigung/Wiederholung)"
+        range 0 1
+        default 1
+
     config RE_DEVICE_ID
         string "Geraete-ID (Teil des MQTT-Topics)"
         default "esp32s3-01"

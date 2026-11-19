@@ -32,5 +32,6 @@
     "--background-index",
     "--query-driver=**",
     "--compile-commands-dir=c:\\Users\\AndiR\\tinlv2\\build"
-  ]
+  ],
+  "idf.flashType": "UART"
 }

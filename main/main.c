@@ -86,6 +86,8 @@ static EventGroupHandle_t       s_events;
 static volatile uint32_t s_dropped;    /* verworfen, weil Netzwerk zu langsam */
 static uint32_t s_sent;                /* erfolgreich an MQTT uebergeben */
 static uint32_t s_pub_fail;            /* publish fehlgeschlagen / nicht verbunden */
+static uint32_t s_outbox_full;         /* QoS 1: Outbox voll, Block verworfen */
+#define OUTBOX_BLOCKS  12              /* max. unbestaetigte Bloecke (~0.8 s, ~50 KB RAM) */
 
 /* ======================= WLAN ======================= */
 static const char *wifi_reason_hint(int reason)
@@ -194,6 +196,7 @@ static void mqtt_init(void)
         },
         .session.keepalive = 10,
         .buffer.size = sizeof(audio_block_t) + 256,
+        .outbox.limit = (uint64_t)OUTBOX_BLOCKS * (sizeof(audio_block_t) + 64),
         .network.reconnect_timeout_ms = 2000,
     };
     if (strlen(CONFIG_RE_MQTT_USER) > 0) {
@@ -356,10 +359,17 @@ static void mqtt_task(void *arg)
         frames_acc += FRAMES_PER_MSG;
 
         EventBits_t bits = xEventGroupGetBits(s_events);
-        if ((bits & MQTT_UP_BIT) &&
-            esp_mqtt_client_publish(s_mqtt, TOPIC_AUDIO, (const char *)blk,
-                                    sizeof(audio_block_t), 0, 0) >= 0) {
+        int rc = -1;
+        if (bits & MQTT_UP_BIT) {
+            /* QoS 1: esp-mqtt behaelt den Block im Outbox-Speicher, bis der Broker
+             * ihn bestaetigt (PUBACK), und sendet ihn sonst erneut. */
+            rc = esp_mqtt_client_publish(s_mqtt, TOPIC_AUDIO, (const char *)blk,
+                                         sizeof(audio_block_t), CONFIG_RE_AUDIO_QOS, 0);
+        }
+        if (rc >= 0) {
             s_sent++;
+        } else if (rc == -2) {
+            s_outbox_full++;   /* zu viele unbestaetigte Bloecke -> verworfen */
         } else {
             s_pub_fail++;
         }
@@ -378,10 +388,11 @@ static void mqtt_task(void *arg)
             static int log_div;
             if (++log_div >= 8) {
                 log_div = 0;
-                ESP_LOGI(TAG, "seq=%lu gesendet=%lu verworfen=%lu nicht_gesendet=%lu  "
-                         "RMS L=%.1f R=%.1f dBFS  WLAN=%s MQTT=%s",
+                ESP_LOGI(TAG, "seq=%lu gesendet=%lu verworfen=%lu nicht_gesendet=%lu "
+                         "outbox_voll=%lu outbox=%dB  RMS L=%.1f R=%.1f dBFS  WLAN=%s MQTT=%s",
                          (unsigned long)blk->hdr.seq, (unsigned long)s_sent,
                          (unsigned long)s_dropped, (unsigned long)s_pub_fail,
+                         (unsigned long)s_outbox_full, esp_mqtt_client_get_outbox_size(s_mqtt),
                          to_dbfs(sqrt(sum_l / frames_acc)), to_dbfs(sqrt(sum_r / frames_acc)),
                          (bits & WIFI_UP_BIT) ? "ok" : "--", (bits & MQTT_UP_BIT) ? "ok" : "--");
             }

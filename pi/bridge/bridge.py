@@ -97,6 +97,9 @@ class DeviceClock:
     def to_wall_us(self, esp_ts_us: int, block_us: int) -> int:
         now_us = time.time_ns() // 1000
         if self.offset_us is not None and self.last_esp is not None:
+            if esp_ts_us <= self.last_esp and esp_ts_us + 5_000_000 >= self.last_esp:
+                # verspaeteter Block (QoS-1-Wiederholung): Zeit aus bestehender Zeitbasis
+                return self.offset_us + esp_ts_us
             predicted = self.offset_us + esp_ts_us
             reboot = esp_ts_us < self.last_esp
             drift = abs(predicted - (now_us - block_us))
@@ -117,7 +120,8 @@ class Bridge:
         )
         self.clocks: dict[str, DeviceClock] = {}
         self.last_seq: dict[str, int] = {}
-        self.stats = {"blocks": 0, "gaps": 0, "bad": 0, "level": 0}
+        self.recent: dict[str, list[int]] = {}
+        self.stats = {"blocks": 0, "gaps": 0, "bad": 0, "level": 0, "dup": 0, "late": 0}
         self.lock = threading.Lock()
 
     # ---------------------------------------------------------- InfluxDB
@@ -140,8 +144,10 @@ class Bridge:
             log.error("MQTT Verbindung abgelehnt: %s", rc)
             return
         log.info("MQTT verbunden mit %s:%d", MQTT_HOST, MQTT_PORT)
-        for t in ("audio", "level", "status"):
-            client.subscribe(f"{MQTT_BASE}/+/{t}", qos=0)
+        # Audio mit QoS 1 abonnieren, sonst stuft der Broker die Zustellung auf QoS 0 herunter
+        client.subscribe(f"{MQTT_BASE}/+/audio", qos=1)
+        client.subscribe(f"{MQTT_BASE}/+/level", qos=0)
+        client.subscribe(f"{MQTT_BASE}/+/status", qos=1)
 
     def on_disconnect(self, client, userdata, flags, rc, props=None):
         log.warning("MQTT getrennt (%s), verbinde neu ...", rc)
@@ -172,16 +178,29 @@ class Bridge:
             log.warning("Ungueltiger Block von %s (magic=%r bits=%d len=%d)", device, magic, bits, len(pcm))
             return
 
-        # Verlorene Bloecke zaehlen (seq-Luecke). Ruecksprung = ESP-Neustart.
+        # Verlorene Bloecke zaehlen (seq-Luecke). QoS 1 kann Bloecke doppelt oder
+        # verspaetet liefern: Duplikate verwerfen, verspaetete trotzdem schreiben
+        # (sie fuellen die Luecke, ihre Zeit kommt aus dem ESP-Zeitstempel).
         prev = self.last_seq.get(device)
         gap = 0
-        if prev is not None and seq > prev + 1:
-            gap = seq - prev - 1
-            self.stats["gaps"] += gap
-        self.last_seq[device] = seq
+        clock = self.clocks.setdefault(device, DeviceClock())
+        reboot = clock.last_esp is not None and ts_us + 5_000_000 < clock.last_esp
+        if prev is not None and not reboot and seq <= prev:
+            if seq == prev or seq in self.recent.get(device, ()):
+                self.stats["dup"] += 1
+                return
+            self.stats["late"] += 1
+        else:
+            if prev is not None and seq > prev + 1:
+                gap = seq - prev - 1
+                self.stats["gaps"] += gap
+            self.last_seq[device] = seq
+        rec = self.recent.setdefault(device, [])
+        rec.append(seq)
+        del rec[:-64]
 
         block_us = frames * 1_000_000 // rate
-        t_us = self.clocks.setdefault(device, DeviceClock()).to_wall_us(ts_us, block_us)
+        t_us = clock.to_wall_us(ts_us, block_us)
 
         samples = array("h")
         samples.frombytes(pcm)
@@ -238,8 +257,8 @@ class Bridge:
             d = {k: s[k] - last[k] for k in s}
             last = s
             log.info(
-                "10s: %d Audio-Bloecke (%.1f/s), %d verloren, %d ungueltig, %d Pegel",
-                d["blocks"], d["blocks"] / 10, d["gaps"], d["bad"], d["level"],
+                "10s: %d Audio-Bloecke (%.1f/s), %d verloren, %d verspaetet, %d doppelt, %d ungueltig, %d Pegel",
+                d["blocks"], d["blocks"] / 10, d["gaps"], d["late"], d["dup"], d["bad"], d["level"],
             )
             try:
                 self.write.write(

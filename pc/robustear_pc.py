@@ -145,8 +145,8 @@ def cmd_live(a):
             print(f"MQTT Verbindung abgelehnt: {rc}")
             return
         print(f"MQTT verbunden mit {a.host}:{a.port}, abonniere {topic}")
-        c.subscribe(topic)
-        c.subscribe(f"{a.base}/{a.device}/status")
+        c.subscribe(topic, qos=1)
+        c.subscribe(f"{a.base}/{a.device}/status", qos=1)
 
     def on_message(c, u, msg):
         if msg.topic.endswith("/status"):
@@ -168,7 +168,7 @@ def cmd_live(a):
     player = None
     wav = None
     last_seq = None
-    lost = blocks = bad = 0
+    lost = blocks = bad = dups = 0
     window = []
     t_print = time.time()
     t_end = time.time() + a.seconds if a.seconds else None
@@ -206,6 +206,9 @@ def cmd_live(a):
                     wav.setsampwidth(2)
                     wav.setframerate(rate)
 
+            if last_seq is not None and last_seq - 100 < seq <= last_seq:
+                dups += 1  # QoS 1: doppelt oder verspaetet zugestellt -> ueberspringen
+                continue
             if last_seq is not None and seq > last_seq + 1:
                 missing = seq - last_seq - 1
                 lost += missing
@@ -249,7 +252,8 @@ def cmd_live(a):
             print(f"Gespeichert: {a.record}")
         total = blocks + lost
         if total:
-            print(f"Empfangen {blocks} Bloecke, verloren {lost} ({100 * lost / total:.1f} %), ungueltig {bad}")
+            print(f"Empfangen {blocks} Bloecke, verloren {lost} ({100 * lost / total:.1f} %), "
+                  f"doppelt {dups}, ungueltig {bad}")
 
 
 # ------------------------------------------------------------------ fetch
