@@ -7,8 +7,8 @@ RobustEar PC-Werkzeug: Audio vom ESP32 mithoeren, aufnehmen, aus InfluxDB holen 
   analyze  WAV-Datei pruefen (DC-Offset, Pegel, Clipping, L/R-Korrelation, Spektrum)
 
 Beispiele:
-  python robustear_pc.py live --host 192.168.1.50
-  python robustear_pc.py live --host 192.168.1.50 --record test.wav --no-play
+  python robustear_pc.py live --host 192.168.1.55
+  python robustear_pc.py live --host 192.168.1.55 --record test.wav --no-play
   python robustear_pc.py fetch --start -5m --out letzte5min.wav
   python robustear_pc.py analyze letzte5min.wav
 
