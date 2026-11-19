@@ -1,0 +1,41 @@
+menu "RobustEar Konfiguration"
+
+    config RE_WIFI_SSID
+        string "WLAN SSID"
+        default "MeinWLAN"
+
+    config RE_WIFI_PASSWORD
+        string "WLAN Passwort"
+        default "geheim"
+
+    config RE_MQTT_URI
+        string "MQTT Broker URI (Raspberry Pi)"
+        default "mqtt://192.168.1.50:1883"
+
+    config RE_DEVICE_ID
+        string "Geraete-ID (Teil des MQTT-Topics)"
+        default "esp32s3-01"
+
+    config RE_SAMPLE_RATE
+        int "Abtastrate (Hz)"
+        default 16000
+
+    config RE_FRAMES_PER_MSG
+        int "Stereo-Frames pro MQTT-Nachricht"
+        default 1024
+        help
+            1024 Frames bei 16 kHz = 64 ms Audio pro Nachricht.
+
+    config RE_GPIO_BCLK
+        int "I2S BCLK / SCK GPIO"
+        default 3
+
+    config RE_GPIO_WS
+        int "I2S WS / LRCL GPIO"
+        default 5
+
+    config RE_GPIO_DIN
+        int "I2S Daten (SD / DOUT des Mikrofons) GPIO"
+        default 4
+
+endmenu

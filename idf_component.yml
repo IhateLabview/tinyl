@@ -1,0 +1,12 @@
+## ESP-IDF Component Manager
+## Ab ESP-IDF v6.0 ist MQTT nicht mehr Teil von ESP-IDF, sondern eine eigene
+## Komponente. Sie wird beim ersten Build automatisch heruntergeladen
+## (Ordner managed_components/). Fuer ESP-IDF v5.x wird diese Datei ignoriert,
+## dort ist MQTT noch eingebaut.
+dependencies:
+  idf:
+    version: ">=5.3"
+  espressif/mqtt:
+    version: ">=1.0.0"
+    rules:
+      - if: "idf_version >=6.0"
