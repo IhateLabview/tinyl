@@ -88,15 +88,45 @@ static uint32_t s_sent;                /* erfolgreich an MQTT uebergeben */
 static uint32_t s_pub_fail;            /* publish fehlgeschlagen / nicht verbunden */
 
 /* ======================= WLAN ======================= */
+static const char *wifi_reason_hint(int reason)
+{
+    switch (reason) {
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_AUTH_FAIL:
+        return "Passwort falsch?";
+    case WIFI_REASON_NO_AP_FOUND:
+        return "SSID nicht gefunden: Name falsch, nur 5 GHz oder zu weit weg";
+    case WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY:
+    case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
+        return "Verschluesselung passt nicht (WPA2/WPA3)";
+    case WIFI_REASON_NO_AP_FOUND_IN_RSSI_THRESHOLD:
+    case WIFI_REASON_BEACON_TIMEOUT:
+        return "Signal zu schwach - Antenne angesteckt?";
+    case WIFI_REASON_ASSOC_LEAVE:
+        return "vom ESP selbst getrennt";
+    default:
+        return "siehe wifi_err_reason_t";
+    }
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t *d = (wifi_event_sta_disconnected_t *)data;
         xEventGroupClearBits(s_events, WIFI_UP_BIT);
-        ESP_LOGW(TAG, "WLAN getrennt, verbinde neu ...");
+        ESP_LOGW(TAG, "WLAN getrennt: Grund %d (%s), RSSI %d dBm, verbinde neu ...",
+                 d->reason, wifi_reason_hint(d->reason), d->rssi);
         vTaskDelay(pdMS_TO_TICKS(1000));
         esp_wifi_connect();
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
+        wifi_ap_record_t ap;
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+            ESP_LOGI(TAG, "WLAN verbunden mit '%s', Kanal %d, RSSI %d dBm%s", (char *)ap.ssid,
+                     ap.primary, ap.rssi, ap.rssi < -75 ? " (SCHWACH - Antenne angesteckt?)" : "");
+        }
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "IP: " IPSTR, IP2STR(&e->ip_info.ip));
@@ -118,7 +148,9 @@ static void wifi_init(void)
     wifi_config_t wc = { 0 };
     strncpy((char *)wc.sta.ssid, CONFIG_RE_WIFI_SSID, sizeof(wc.sta.ssid));
     strncpy((char *)wc.sta.password, CONFIG_RE_WIFI_PASSWORD, sizeof(wc.sta.password));
-    wc.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    wc.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;   /* WPA2 oder besser */
+    wc.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;           /* WPA3-Router ebenfalls erlauben */
+    wc.sta.pmf_cfg.capable = true;
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
