@@ -164,6 +164,10 @@ static void mqtt_init(void)
         .buffer.size = sizeof(audio_block_t) + 256,
         .network.reconnect_timeout_ms = 2000,
     };
+    if (strlen(CONFIG_RE_MQTT_USER) > 0) {
+        cfg.credentials.username = CONFIG_RE_MQTT_USER;
+        cfg.credentials.authentication.password = CONFIG_RE_MQTT_PASSWORD;
+    }
     s_mqtt = esp_mqtt_client_init(&cfg);
     esp_mqtt_client_register_event(s_mqtt, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
     esp_mqtt_client_start(s_mqtt);

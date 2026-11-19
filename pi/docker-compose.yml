@@ -1,0 +1,14 @@
+# RobustEar-Dienste auf dem Raspberry Pi.
+# Mosquitto, InfluxDB und Grafana laufen bereits als eigene Container.
+# network_mode: host -> die Bridge erreicht sie ueber localhost:1883 / localhost:8086,
+# egal in welchem Docker-Netz sie gestartet wurden.
+#
+# Start:   cd pi && cp .env.example .env && nano .env && docker compose up -d --build
+# Logs:    docker compose logs -f bridge
+services:
+  bridge:
+    build: ./bridge
+    container_name: robustear-bridge
+    network_mode: host
+    env_file: .env
+    restart: unless-stopped

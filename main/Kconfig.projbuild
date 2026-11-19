@@ -12,6 +12,14 @@ menu "RobustEar Konfiguration"
         string "MQTT Broker URI (Raspberry Pi)"
         default "mqtt://192.168.1.50:1883"
 
+    config RE_MQTT_USER
+        string "MQTT Benutzername (leer = anonym)"
+        default ""
+
+    config RE_MQTT_PASSWORD
+        string "MQTT Passwort"
+        default ""
+
     config RE_DEVICE_ID
         string "Geraete-ID (Teil des MQTT-Topics)"
         default "esp32s3-01"

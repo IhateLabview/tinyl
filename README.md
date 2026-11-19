@@ -1,53 +1,102 @@
-| Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-C61 | ESP32-H2 | ESP32-H21 | ESP32-H4 | ESP32-P4 | ESP32-S2 | ESP32-S3 | Linux |
-| ----------------- | ----- | -------- | -------- | -------- | -------- | --------- | -------- | --------- | -------- | -------- | -------- | -------- | ----- |
+# RobustEar – Robuste Geräuscherkennung mit Edge-ML
 
-# Hello World Example
-
-Starts a FreeRTOS task to print "Hello World".
-
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
-
-## How to use example
-
-Follow detailed instructions provided specifically for this example.
-
-Select the instructions depending on Espressif chip installed on your development board:
-
-- [ESP32 Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/stable/get-started/index.html)
-- [ESP32-S2 Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s2/get-started/index.html)
-
-
-## Example folder contents
-
-The project **hello_world** contains one source file in C language [hello_world_main.c](main/hello_world_main.c). The file is located in folder [main](main).
-
-ESP-IDF projects are built using CMake. The project build configuration is contained in `CMakeLists.txt` files that provide set of directives and instructions describing the project's source files and targets (executable, library, or both).
-
-Below is short explanation of remaining files in the project folder.
+Zwei INMP441-Mikrofone an einer Seeed XIAO ESP32-S3 streamen Rohaudio per MQTT
+an einen Raspberry Pi (Mosquitto, InfluxDB, Grafana in Docker). Daraus werden
+Modelle mit Rohdaten, leicht und stark gefilterten Daten trainiert und verglichen.
 
 ```
-├── CMakeLists.txt
-├── pytest_hello_world.py      Python script used for automated testing
-├── main
-│   ├── CMakeLists.txt
-│   └── hello_world_main.c
-└── README.md                  This is the file you are currently reading
+ESP32-S3 ──MQTT──> Mosquitto ──> robustear-bridge ──> InfluxDB ──> Grafana
+ 2x INMP441          (Pi)            (Pi, Docker)        (Pi)
+                       └──────────> PC: robustear_pc.py live (Mithören)
+                                    PC: robustear_pc.py fetch (WAV aus InfluxDB)
 ```
 
-For more information on structure and contents of ESP-IDF projects, please refer to Section [Build System](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/build-system.html) of the ESP-IDF Programming Guide.
+## Ordner
 
-## Troubleshooting
+| Ordner | Inhalt |
+|---|---|
+| `main/` | ESP32-S3-Firmware (ESP-IDF v6.0) |
+| `pi/` | MQTT→InfluxDB-Bridge als Docker-Container für den Raspberry Pi |
+| `pc/` | PC-Werkzeug: live mithören, aufnehmen, aus InfluxDB holen, prüfen |
 
-* Program upload failure
+## 1. Firmware (ESP32-S3)
 
-    * Hardware connection is not correct: run `idf.py -p PORT monitor`, and reboot your board to see if there are any output logs.
-    * The baud rate for downloading is too high: lower your baud rate in the `menuconfig` menu, and try again.
+Verdrahtung (beide Mikrofone parallel am selben Bus):
 
-## Technical support and feedback
+| INMP441 | XIAO ESP32-S3 |
+|---|---|
+| SCK  | GPIO3 (BCLK) |
+| WS   | GPIO5 (LRCL) |
+| SD   | GPIO4 (DIN)  |
+| VDD / GND | 3V3 / GND |
+| L/R Mikrofon 1 | GND → linker Kanal |
+| L/R Mikrofon 2 | 3V3 → rechter Kanal |
 
-Please use the following feedback channels:
+```
+idf.py menuconfig        # "RobustEar Konfiguration": WLAN, MQTT-URI (IP des Pi), ggf. MQTT-Login
+idf.py -p COM9 flash monitor
+```
 
-* For technical queries, go to the [esp32.com](https://esp32.com/) forum
-* For a feature request or bug report, create a [GitHub issue](https://github.com/espressif/esp-idf/issues)
+Beim Start prüft ein Selbsttest beide Kanäle und meldet typische Verdrahtungsfehler.
 
-We will get back to you as soon as possible.
+MQTT-Topics (`<id>` = Geräte-ID, Standard `esp32s3-01`):
+
+| Topic | Inhalt |
+|---|---|
+| `robustear/<id>/audio`  | binär: 28-Byte-Header `REA1` + int16 L,R interleaved, 1024 Frames (64 ms) |
+| `robustear/<id>/level`  | JSON: `rms_l, rms_r, peak_l, peak_r` (dBFS), `seq`, `dropped`, ~4 Hz |
+| `robustear/<id>/status` | JSON: `online` / `offline` (retained, Last Will) |
+
+Header (little endian): `magic[4]="REA1", uint32 seq, uint64 timestamp_us, uint32 sample_rate, uint16 channels, uint16 bits, uint32 frames`.
+
+## 2. Bridge auf dem Raspberry Pi
+
+Ordner `pi/` auf den Pi kopieren (oder Repo klonen), dann:
+
+```
+cd pi
+cp .env.example .env
+nano .env                       # INFLUX_ORG, INFLUX_TOKEN, ggf. MQTT_USER/MQTT_PASS
+docker compose up -d --build
+docker compose logs -f bridge   # alle 10 s: Blöcke/s, verlorene Blöcke
+```
+
+Die Bridge legt die Buckets `robustear` (Pegel, Status) und `robustear_raw`
+(Rohaudio, Standard 48 h Aufbewahrung, ca. 300 MB/h) an, falls das Token das darf.
+
+InfluxDB-Daten:
+
+| Bucket | Measurement | Felder |
+|---|---|---|
+| `robustear_raw` | `audio` | `pcm` (base64), `seq`, `gap`, `rms_l`, `rms_r`, `esp_ts_us`, … |
+| `robustear` | `level` | `rms_l`, `rms_r`, `peak_l`, `peak_r`, `dropped` |
+| `robustear` | `status` | `state`, `online` |
+| `robustear` | `bridge` | `blocks_per_s`, `lost_blocks`, `bad_blocks` |
+
+Grafana-Beispiel (Flux):
+```
+from(bucket: "robustear")
+  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+  |> filter(fn: (r) => r._measurement == "level" and (r._field == "rms_l" or r._field == "rms_r"))
+```
+
+## 3. PC-Werkzeug
+
+```
+cd pc
+pip install -r requirements.txt
+copy .env.example .env          # IP des Pi, InfluxDB-Token eintragen
+
+python robustear_pc.py live                         # live mithören + Pegel/Lücken/Korrelation
+python robustear_pc.py live --record test.wav       # dabei als WAV speichern
+python robustear_pc.py live --channel L --gain 30   # nur linkes Mikrofon, lauter
+python robustear_pc.py fetch --start -10m --out x.wav   # aus InfluxDB holen
+python robustear_pc.py analyze x.wav                # DC, Pegel, Clipping, L/R-Korrelation
+```
+
+WAV-Dateien enthalten immer die unveränderten Rohdaten. Nur die Wiedergabe über
+Lautsprecher entfernt den DC-Offset und verstärkt (`--gain`, Standard +20 dB).
+
+**Validierung:** Bei einem lauten Geräusch vor beiden Mikrofonen sollte die
+L/R-Korrelation deutlich positiv sein (> 0.5), `verloren` sollte nahe 0 bleiben,
+und `clip` sollte 0 sein.
